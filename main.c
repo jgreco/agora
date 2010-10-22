@@ -20,9 +20,9 @@
 #define max(x,y) ((x) > (y) ? (x) : (y))
 
 
+/**/
 #define DEBUG
-
-
+/**/
 
 #ifdef DEBUG
 FILE *log_f;
@@ -75,14 +75,16 @@ int main(int argc, char *argv[])
 	term = getenv("TERM");
 
 	master_controlling_tty = open("/dev/tty", O_RDWR | O_NOCTTY);
-	ioctl(master_controlling_tty, TIOCGWINSZ, &term_size);  /* save terminal size */
+	ioctl(master_controlling_tty, TIOCGWINSZ, &term_size); /* save terminal size */
 
 	if(argc < 2) {
 		fprintf(stderr, "Improper number of arguments.\n");
 		exit(EXIT_FAILURE);
 	}
 
-	STUPID = open("/dev/null", O_RDWR);  /* setupterm needs a file descriptor but we don't want it to mess around with our real terminal */
+	/* setupterm needs a file descriptor but we don't want it to mess
+	 * around with our real terminal */
+	STUPID = open("/dev/null", O_RDWR);
 	if(setupterm((char *)0, STUPID, (int *)0) == ERR) {
 		fprintf(stderr, "could not get terminfo.\n");
 		exit(EXIT_FAILURE);
@@ -141,7 +143,6 @@ int main(int argc, char *argv[])
 				ret = read(standard_in, in, BUFSIZ*sizeof(char));
 
 				/* rebuild string */
-	//			strncat(inbuf, in, ret);
 				str_rebuild(in, ret);
 
 				/* tokenize string */
@@ -155,8 +156,8 @@ int main(int argc, char *argv[])
 				kill(pid, SIGKILL);
 
 				if((pid = forkpty(&master_pty, NULL, NULL, &term_size)) == 0) {  /* if child */
-					/* write(STDOUT_FILENO, E_KCLR, S_KCLR); */
-					system("clear");
+					/* clear screen */
+					write(STDOUT_FILENO, E_KCLR, S_KCLR);
 
 					setenv("TERM", term, 1);
 					execvp(argv[1], argbuf);
@@ -213,7 +214,7 @@ void sigwinch_handler(int sig_num)
 
 void setup_escape_seqs()
 {
-	E_KCLR	= tigetstr("kent");	S_KCLR	= strlen(E_KCLR);
+	E_KCLR	= tigetstr("clear");	S_KCLR	= strlen(E_KCLR);
 
 	return;
 }
