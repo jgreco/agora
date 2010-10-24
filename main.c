@@ -15,6 +15,9 @@
 #include <curses.h>
 #include <term.h>
 
+/* for g_shell_parse_argv */
+#include <glib.h>
+
 
 #undef max
 #define max(x,y) ((x) > (y) ? (x) : (y))
@@ -47,18 +50,20 @@ void sigchld_handler(int sig_num);
 void sigwinch_handler(int sig_num);
 void sigterm_handler(int sig_num);
 
-char * argbuf[256];
-char inbuf[BUFSIZ];
+char buf[BUFSIZ];
+char *inbuf;
 int  inbuf_len;
+char *slave_name;
 
 void str_rebuild(char *buf, size_t n);
-
 
 int main(int argc, char *argv[])
 {
 	struct sigaction chld;
 	struct sigaction winch;
 	struct sigaction sigtrm;
+	struct sigaction sigint;
+	struct sigaction sighup;
 	int STUPID;
 
 #ifdef DEBUG
@@ -68,9 +73,13 @@ int main(int argc, char *argv[])
 	memset(&chld, 0, sizeof(chld));
 	memset(&winch, 0, sizeof(winch));
 	memset(&sigtrm, 0, sizeof(sigtrm));
+	memset(&sigint, 0, sizeof(sigint));
+	memset(&sighup, 0, sizeof(sighup));
 	chld.sa_handler = &sigchld_handler;
 	winch.sa_handler = &sigwinch_handler;
 	sigtrm.sa_handler = &sigterm_handler;
+	sigint.sa_handler = &sigterm_handler;
+	sighup.sa_handler = &sigterm_handler;
 
 	term = getenv("TERM");
 
@@ -93,16 +102,20 @@ int main(int argc, char *argv[])
 
 	setup_escape_seqs();
 
-	argbuf[0] = argv[1];
+	memcpy(buf, argv[1], strlen(argv[1]));
+	inbuf = buf + 1 + strlen(argv[1]);
+	(inbuf-1)[0] = ' ';
 	inbuf_len = -1;
 
-	if((pid = forkpty(&master_pty, NULL, NULL, &term_size)) == 0) {  /* if child */
+	if((pid = forkpty(&master_pty, slave_name, NULL, &term_size)) == 0) {  /* if child */
 		setenv("TERM", term, 1);
-		execvp(argv[1], argbuf);
+		execvp(buf, "");
 	} else {
 		/* set up master pty side stuff */
 		int ret;
+		int master_pty_status = 1;
 		int standard_in = dup(STDIN_FILENO);
+
 
 		tcgetattr(master_controlling_tty, &term_settings);
 		tcgetattr(master_controlling_tty, &orig_settings);
@@ -115,6 +128,8 @@ int main(int argc, char *argv[])
 		sigaction(SIGCHLD, &chld, NULL);
 		sigaction(SIGWINCH, &winch, NULL);
 		sigaction(SIGTERM, &sigtrm, NULL);
+		sigaction(SIGINT, &sigint, NULL);
+		sigaction(SIGHUP, &sighup, NULL);
 
 		/* main input loop */
 		while(1) {
@@ -131,43 +146,55 @@ int main(int argc, char *argv[])
 			nfds = max(nfds, standard_in);
 			FD_SET(standard_in, &rd);
 
-			nfds = max(nfds, master_pty);
-			FD_SET(master_pty, &rd);
+			if(master_pty_status) {
+				nfds = max(nfds, master_pty);
+				FD_SET(master_pty, &rd);
+			}
 
 			r = select(nfds+1, &rd, &wr, &er, NULL);
 
-			if(r == -1)
+			if(r == -1) {
 				continue;
+			}
 
 			if(FD_ISSET(standard_in, &rd)) {
+				char **argbuf;
+				GError *err = NULL;
 				ret = read(standard_in, in, BUFSIZ*sizeof(char));
 
 				/* rebuild string */
 				str_rebuild(in, ret);
 
 				/* tokenize string */
-				if(inbuf_len != -1)
-					argbuf[1] = inbuf;
-				else
-					argbuf[1] = 0;
+				g_shell_parse_argv(buf, NULL, &argbuf, &err);
+				if(err != NULL)
+					continue;
 
 				/* re-fork */
 				close(master_pty);
 				kill(pid, SIGKILL);
 
-				if((pid = forkpty(&master_pty, NULL, NULL, &term_size)) == 0) {  /* if child */
+				if((pid = forkpty(&master_pty, slave_name, NULL, &term_size)) == 0) {  /* if child */
 					/* clear screen */
 					write(STDOUT_FILENO, E_KCLR, S_KCLR);
 
 					setenv("TERM", term, 1);
-					execvp(argv[1], argbuf);
+					execvp(argbuf[0], argbuf);
 				}
 
 				/* free tokenized string */
+				g_strfreev(argbuf);
 
+				master_pty_status = 1;
 			}
 			if(FD_ISSET(master_pty, &rd)) {
 				ret = read(master_pty, in, BUFSIZ*sizeof(char));
+
+				if(ret == -1) {
+					master_pty_status = 0;
+					continue;
+				}
+
 				write(STDOUT_FILENO, in, ret*sizeof(char));
 			}
 		}
@@ -178,14 +205,16 @@ int main(int argc, char *argv[])
 
 void str_rebuild(char *buf, size_t n)
 {
-	int i;
+	unsigned int i;
 
 	for(i=0; i<n; i++) {
 		if(buf[i] == 127) {
 			if(inbuf_len != -1)
 				inbuf[inbuf_len--] = '\0';
-		}
-		else
+		} else if(buf[i] == 23) {
+			inbuf_len = -1;
+			memset(inbuf, 0, BUFSIZ);
+		} else
 			inbuf[++inbuf_len] = buf[i];
 	}
 
@@ -201,7 +230,7 @@ void sigterm_handler(int sig_num)
 {
 	tcsetattr(master_controlling_tty, TCSANOW, &orig_settings);
 	exit(EXIT_SUCCESS);
-	return;  /* we don't care if the child dies */
+	return;
 }
 
 void sigwinch_handler(int sig_num)

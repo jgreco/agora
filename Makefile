@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -O2 -g -Wall -Wextra -Wno-unused-parameter -pedantic -pipe
-LIBS = -lcurses -lutil
+CFLAGS = -O2 -g -Wall -Wextra -Wno-unused-parameter -pedantic -pipe `pkg-config --cflags  glib-2.0`
+LIBS = -lcurses -lutil -lglib-2.0
 OBJDIR = .build
 OBJECTS = main.o
 OBJECTS :=  $(addprefix ${OBJDIR}/,${OBJECTS})
