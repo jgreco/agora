@@ -25,9 +25,9 @@
 #define max(x,y) ((x) > (y) ? (x) : (y))
 
 
-/**/
+/*
 #define DEBUG
-/**/
+*/
 
 #ifdef DEBUG
 FILE *log_f;
