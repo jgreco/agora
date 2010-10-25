@@ -18,6 +18,8 @@
 /* for g_shell_parse_argv */
 #include <glib.h>
 
+#include <readline/readline.h>
+
 
 #undef max
 #define max(x,y) ((x) > (y) ? (x) : (y))
@@ -55,7 +57,7 @@ char *inbuf;
 int  inbuf_len;
 char *slave_name;
 
-void str_rebuild(char *buf, size_t n);
+void null();
 
 int main(int argc, char *argv[])
 {
@@ -105,7 +107,6 @@ int main(int argc, char *argv[])
 	memcpy(buf, argv[1], strlen(argv[1]));
 	inbuf = buf + 1 + strlen(argv[1]);
 	(inbuf-1)[0] = ' ';
-	inbuf_len = -1;
 
 	if((pid = forkpty(&master_pty, slave_name, NULL, &term_size)) == 0) {  /* if child */
 		setenv("TERM", term, 1);
@@ -116,14 +117,7 @@ int main(int argc, char *argv[])
 		int master_pty_status = 1;
 		int standard_in = dup(STDIN_FILENO);
 
-
-		tcgetattr(master_controlling_tty, &term_settings);
-		tcgetattr(master_controlling_tty, &orig_settings);
-		cfmakeraw(&term_settings);
-		term_settings.c_cc[VMIN] = 1;
-		term_settings.c_cc[VTIME] = 1;
-
-		tcsetattr(master_controlling_tty, TCSANOW, &term_settings);
+		rl_callback_handler_install ("", null);
 
 		sigaction(SIGCHLD, &chld, NULL);
 		sigaction(SIGWINCH, &winch, NULL);
@@ -133,8 +127,6 @@ int main(int argc, char *argv[])
 
 		/* main input loop */
 		while(1) {
-			char in[BUFSIZ];
-
 			int nfds=0;
 			int r;
 
@@ -160,10 +152,11 @@ int main(int argc, char *argv[])
 			if(FD_ISSET(standard_in, &rd)) {
 				char **argbuf;
 				GError *err = NULL;
-				ret = read(standard_in, in, BUFSIZ*sizeof(char));
+
+				rl_callback_read_char();
 
 				/* rebuild string */
-				str_rebuild(in, ret);
+				strncpy(inbuf, rl_line_buffer, BUFSIZ - (1 + strlen(argv[1])));
 
 				/* tokenize string */
 				g_shell_parse_argv(buf, NULL, &argbuf, &err);
@@ -188,6 +181,7 @@ int main(int argc, char *argv[])
 				master_pty_status = 1;
 			}
 			if(FD_ISSET(master_pty, &rd)) {
+				char in[BUFSIZ];
 				ret = read(master_pty, in, BUFSIZ*sizeof(char));
 
 				if(ret == -1) {
@@ -203,22 +197,8 @@ int main(int argc, char *argv[])
 	return 0;
 }
 
-void str_rebuild(char *buf, size_t n)
+void null()
 {
-	unsigned int i;
-
-	for(i=0; i<n; i++) {
-		if(buf[i] == 127) {
-			if(inbuf_len != -1)
-				inbuf[inbuf_len--] = '\0';
-		} else if(buf[i] == 23) {
-			inbuf_len = -1;
-			memset(inbuf, 0, BUFSIZ);
-		} else
-			inbuf[++inbuf_len] = buf[i];
-	}
-
-	return;
 }
 
 void sigchld_handler(int sig_num)
