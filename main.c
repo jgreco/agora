@@ -116,14 +116,14 @@ int main(int argc, char *argv[])
 		int master_pty_status = 1;
 		int standard_in = dup(STDIN_FILENO);
 
-		/* setup readline */
-		rl_callback_handler_install ("", null);
-
 		sigaction(SIGCHLD, &chld, NULL);
 		sigaction(SIGWINCH, &winch, NULL);
 		sigaction(SIGTERM, &sigtrm, NULL);
 		sigaction(SIGINT, &sigint, NULL);
 		sigaction(SIGHUP, &sighup, NULL);
+
+		/* setup readline */
+		rl_callback_handler_install ("", null);
 
 		/* main input loop */
 		while(1) {
