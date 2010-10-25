@@ -39,9 +39,6 @@ int slave_pty;
 
 int pid;
 
-char *term = NULL;
-struct termios term_settings;
-struct termios orig_settings;
 struct winsize term_size;
 
 void setup_escape_seqs();
@@ -52,10 +49,6 @@ void sigchld_handler(int sig_num);
 void sigwinch_handler(int sig_num);
 void sigterm_handler(int sig_num);
 
-char buf[BUFSIZ];
-char *inbuf;
-int  inbuf_len;
-char *slave_name;
 
 void null();
 
@@ -67,10 +60,10 @@ int main(int argc, char *argv[])
 	struct sigaction sigint;
 	struct sigaction sighup;
 	int STUPID;
-
-#ifdef DEBUG
-	log_f = fopen("dump", "w");
-#endif
+	char *slave_name;
+	char buf[BUFSIZ];
+	char *inbuf;
+	char *term = NULL;
 
 	memset(&chld, 0, sizeof(chld));
 	memset(&winch, 0, sizeof(winch));
@@ -84,6 +77,10 @@ int main(int argc, char *argv[])
 	sighup.sa_handler = &sigterm_handler;
 
 	term = getenv("TERM");
+
+#ifdef DEBUG
+	log_f = fopen("dump", "w");
+#endif
 
 	master_controlling_tty = open("/dev/tty", O_RDWR | O_NOCTTY);
 	ioctl(master_controlling_tty, TIOCGWINSZ, &term_size); /* save terminal size */
@@ -104,10 +101,12 @@ int main(int argc, char *argv[])
 
 	setup_escape_seqs();
 
+	/* set up string to be parsed into child's argv */
 	memcpy(buf, argv[1], strlen(argv[1]));
 	inbuf = buf + 1 + strlen(argv[1]);
 	(inbuf-1)[0] = ' ';
 
+	/* start off by forking a child with no arguments */
 	if((pid = forkpty(&master_pty, slave_name, NULL, &term_size)) == 0) {  /* if child */
 		setenv("TERM", term, 1);
 		execvp(buf, "");
@@ -117,6 +116,7 @@ int main(int argc, char *argv[])
 		int master_pty_status = 1;
 		int standard_in = dup(STDIN_FILENO);
 
+		/* setup readline */
 		rl_callback_handler_install ("", null);
 
 		sigaction(SIGCHLD, &chld, NULL);
@@ -130,6 +130,7 @@ int main(int argc, char *argv[])
 			int nfds=0;
 			int r;
 
+			/* setup select stuff */
 			fd_set rd, wr, er;
 			FD_ZERO(&rd);
 			FD_ZERO(&wr);
@@ -146,9 +147,11 @@ int main(int argc, char *argv[])
 			r = select(nfds+1, &rd, &wr, &er, NULL);
 
 			if(r == -1) {
+				/* select errored, lets try again... */
 				continue;
 			}
 
+			/* read user input */
 			if(FD_ISSET(standard_in, &rd)) {
 				char **argbuf;
 				GError *err = NULL;
@@ -163,10 +166,11 @@ int main(int argc, char *argv[])
 				if(err != NULL)
 					continue;
 
-				/* re-fork */
+				/* kill old child, if it's still around */
 				close(master_pty);
 				kill(pid, SIGKILL);
 
+				/* re-fork */
 				if((pid = forkpty(&master_pty, slave_name, NULL, &term_size)) == 0) {  /* if child */
 					/* clear screen */
 					write(STDOUT_FILENO, E_KCLR, S_KCLR);
@@ -180,9 +184,14 @@ int main(int argc, char *argv[])
 
 				master_pty_status = 1;
 			}
+
+			/* read output from child proc */
 			if(FD_ISSET(master_pty, &rd)) {
-				char in[BUFSIZ];
-				ret = read(master_pty, in, BUFSIZ*sizeof(char));
+				char in[256];  /* we're using a small buffer
+						  here so that large amounts
+						  of output don't cause undo
+						  delay for the user */
+				ret = read(master_pty, in, 256*sizeof(char));
 
 				if(ret == -1) {
 					master_pty_status = 0;
@@ -208,7 +217,7 @@ void sigchld_handler(int sig_num)
 
 void sigterm_handler(int sig_num)
 {
-	tcsetattr(master_controlling_tty, TCSANOW, &orig_settings);
+	rl_callback_handler_remove();
 	exit(EXIT_SUCCESS);
 	return;
 }
