@@ -60,7 +60,6 @@ int main(int argc, char *argv[])
 	struct sigaction sigint;
 	struct sigaction sighup;
 	int STUPID;
-	char *slave_name;
 	char buf[BUFSIZ];
 	char *inbuf;
 	char *term = NULL;
@@ -107,7 +106,7 @@ int main(int argc, char *argv[])
 	(inbuf-1)[0] = ' ';
 
 	/* start off by forking a child with no arguments */
-	if((pid = forkpty(&master_pty, slave_name, NULL, &term_size)) == 0) {  /* if child */
+	if((pid = forkpty(&master_pty, NULL, NULL, &term_size)) == 0) {  /* if child */
 		setenv("TERM", term, 1);
 		execvp(buf, "");
 	} else {
@@ -171,7 +170,7 @@ int main(int argc, char *argv[])
 				kill(pid, SIGKILL);
 
 				/* re-fork */
-				if((pid = forkpty(&master_pty, slave_name, NULL, &term_size)) == 0) {  /* if child */
+				if((pid = forkpty(&master_pty, NULL, NULL, &term_size)) == 0) {  /* if child */
 					/* clear screen */
 					write(STDOUT_FILENO, E_KCLR, S_KCLR);
 
