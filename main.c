@@ -61,6 +61,7 @@ int main(int argc, char *argv[])
 	struct sigaction sigint;
 	struct sigaction sighup;
 	char buf[BUFSIZ];
+	int cursor_offset;
 	char *inbuf;
 	int i, j;
 
@@ -81,6 +82,7 @@ int main(int argc, char *argv[])
 	start_color();
 	raw();
 	nodelay(stdscr, TRUE);
+	curs_set(0);
 
 	keypad(stdscr, TRUE);
 	getmaxyx(stdscr, screen_h, screen_w);
@@ -108,6 +110,7 @@ int main(int argc, char *argv[])
 	/* set up string to be parsed into child's argv */
 	memcpy(buf, argv[1], strlen(argv[1]));
 	inbuf = buf + 1 + strlen(argv[1]);
+	cursor_offset = 1 + strlen(argv[1]);
 	(inbuf-1)[0] = ' ';
 
 	/* start off by forking a child with no arguments */
@@ -169,6 +172,7 @@ int main(int argc, char *argv[])
 
 				werase(command_win);
 				mvwprintw(command_win, 0, 0, "%s", buf);
+				mvwchgat(command_win, 0, rl_point + cursor_offset, 1, A_REVERSE, 0, NULL);
 				wrefresh(command_win);
 
 				/* tokenize string */
