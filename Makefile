@@ -1,12 +1,12 @@
 CC = gcc
 CFLAGS = -O2 -g -Wall -Wextra -Wno-unused-parameter -pedantic -pipe `pkg-config --cflags  glib-2.0`
-LIBS = -lcurses -lutil -lglib-2.0 -lreadline
+LIBS = -Wl,-Bdynamic -lncurses -lutil -lglib-2.0 -lreadline
 OBJDIR = .build
 OBJECTS = main.o
 OBJECTS :=  $(addprefix ${OBJDIR}/,${OBJECTS})
 
 agora: $(OBJECTS)
-	$(CC) $(CFLAGS) $(LIBS) $(OBJECTS) -o agora
+	$(CC) $(CFLAGS) $(LIBS) $(OBJECTS) -o agora libvterm.a
 
 
 ${OBJDIR}/%.o : %.c
