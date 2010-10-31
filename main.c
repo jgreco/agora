@@ -12,8 +12,9 @@
 #include <pty.h>
 
 /* for terminfo usage only.  curses input/output is never used */
-#include <curses.h>
+#include <ncurses.h>
 #include <term.h>
+#include "vterm.h"
 
 /* for g_shell_parse_argv */
 #include <glib.h>
@@ -34,20 +35,20 @@ FILE *log_f;
 #endif
 
 int master_controlling_tty;
-int master_pty;
+int vterm_pty;
 int slave_pty;
 
 int pid;
 
 struct winsize term_size;
 
-void setup_escape_seqs();
-
-char *E_KCLR;	int S_KCLR;
-
 void sigchld_handler(int sig_num);
 void sigwinch_handler(int sig_num);
 void sigterm_handler(int sig_num);
+
+WINDOW *term_win, *command_win;
+vterm_t *vterm;
+int screen_h, screen_w;
 
 
 void null();
@@ -59,10 +60,9 @@ int main(int argc, char *argv[])
 	struct sigaction sigtrm;
 	struct sigaction sigint;
 	struct sigaction sighup;
-	int STUPID;
 	char buf[BUFSIZ];
 	char *inbuf;
-	char *term = NULL;
+	int i, j;
 
 	memset(&chld, 0, sizeof(chld));
 	memset(&winch, 0, sizeof(winch));
@@ -75,30 +75,35 @@ int main(int argc, char *argv[])
 	sigint.sa_handler = &sigterm_handler;
 	sighup.sa_handler = &sigterm_handler;
 
-	term = getenv("TERM");
+	/* ncurses setup */
+	initscr();
+	noecho();
+	start_color();
+	raw();
+	nodelay(stdscr, TRUE);
+
+	keypad(stdscr, TRUE);
+	getmaxyx(stdscr, screen_h, screen_w);
+
+	for(i=0; i<8; i++)
+	for(j=0; j<8; j++)
+		if(i!=7 || j!=0)
+			init_pair(j*8+7-i, i, j);
+
+
+	term_win = newwin(screen_h-1, screen_w, 0, 0);
+	command_win = newwin(1, screen_w, screen_h-1, 0);
+	wrefresh(term_win);
+	wrefresh(command_win);
 
 #ifdef DEBUG
 	log_f = fopen("dump", "w");
 #endif
 
-	master_controlling_tty = open("/dev/tty", O_RDWR | O_NOCTTY);
-	ioctl(master_controlling_tty, TIOCGWINSZ, &term_size); /* save terminal size */
-
 	if(argc < 2) {
 		fprintf(stderr, "Improper number of arguments.\n");
 		exit(EXIT_FAILURE);
 	}
-
-	/* setupterm needs a file descriptor but we don't want it to mess
-	 * around with our real terminal */
-	STUPID = open("/dev/null", O_RDWR);
-	if(setupterm((char *)0, STUPID, (int *)0) == ERR) {
-		fprintf(stderr, "could not get terminfo.\n");
-		exit(EXIT_FAILURE);
-	}
-	close(STUPID);
-
-	setup_escape_seqs();
 
 	/* set up string to be parsed into child's argv */
 	memcpy(buf, argv[1], strlen(argv[1]));
@@ -106,14 +111,15 @@ int main(int argc, char *argv[])
 	(inbuf-1)[0] = ' ';
 
 	/* start off by forking a child with no arguments */
-	if((pid = forkpty(&master_pty, NULL, NULL, &term_size)) == 0) {  /* if child */
-		setenv("TERM", term, 1);
-		execvp(buf, "");
+	if((vterm = vterm_create_classic(screen_w, screen_h-1, 0)) == 0) {
+		exit(EXIT_SUCCESS);
 	} else {
 		/* set up master pty side stuff */
-		int ret;
-		int master_pty_status = 1;
 		int standard_in = dup(STDIN_FILENO);
+
+		vterm_set_colors(vterm,COLOR_WHITE,COLOR_BLACK);
+		vterm_wnd_set(vterm, term_win);
+
 
 		sigaction(SIGCHLD, &chld, NULL);
 		sigaction(SIGWINCH, &winch, NULL);
@@ -126,11 +132,14 @@ int main(int argc, char *argv[])
 
 		/* main input loop */
 		while(1) {
+			fd_set rd, wr, er;
 			int nfds=0;
 			int r;
 
+			pid = vterm_get_pid(vterm);
+			vterm_pty = vterm_get_pty_fd(vterm);
+
 			/* setup select stuff */
-			fd_set rd, wr, er;
 			FD_ZERO(&rd);
 			FD_ZERO(&wr);
 			FD_ZERO(&er);
@@ -138,10 +147,8 @@ int main(int argc, char *argv[])
 			nfds = max(nfds, standard_in);
 			FD_SET(standard_in, &rd);
 
-			if(master_pty_status) {
-				nfds = max(nfds, master_pty);
-				FD_SET(master_pty, &rd);
-			}
+			nfds = max(nfds, vterm_pty);
+			FD_SET(vterm_pty, &rd);
 
 			r = select(nfds+1, &rd, &wr, &er, NULL);
 
@@ -160,44 +167,39 @@ int main(int argc, char *argv[])
 				/* rebuild string */
 				strncpy(inbuf, rl_line_buffer, BUFSIZ - (1 + strlen(argv[1])));
 
+				werase(command_win);
+				mvwprintw(command_win, 0, 0, "%s", buf);
+				wrefresh(command_win);
+
 				/* tokenize string */
 				g_shell_parse_argv(buf, NULL, &argbuf, &err);
 				if(err != NULL)
 					continue;
 
 				/* kill old child, if it's still around */
-				close(master_pty);
+				close(vterm_pty);
+				free(vterm);  /* is this ok? */
 				kill(pid, SIGKILL);
 
 				/* re-fork */
-				if((pid = forkpty(&master_pty, NULL, NULL, &term_size)) == 0) {  /* if child */
-					/* clear screen */
-					write(STDOUT_FILENO, E_KCLR, S_KCLR);
-
-					setenv("TERM", term, 1);
+				if((vterm = vterm_create_classic(screen_w, screen_h-1, 0)) == 0) {
 					execvp(argbuf[0], argbuf);
 				}
+				vterm_set_colors(vterm,COLOR_WHITE,COLOR_BLACK);
+				vterm_wnd_set(vterm, term_win);
 
 				/* free tokenized string */
 				g_strfreev(argbuf);
-
-				master_pty_status = 1;
 			}
 
 			/* read output from child proc */
-			if(FD_ISSET(master_pty, &rd)) {
-				char in[256];  /* we're using a small buffer
-						  here so that large amounts
-						  of output don't cause undo
-						  delay for the user */
-				ret = read(master_pty, in, 256*sizeof(char));
-
-				if(ret == -1) {
-					master_pty_status = 0;
-					continue;
+			if(FD_ISSET(vterm_pty, &rd)) {
+				if(vterm_read_pipe(vterm)) {
+					vterm_wnd_update(vterm);
+					touchwin(term_win);
+					wrefresh(term_win);
+					refresh();
 				}
-
-				write(STDOUT_FILENO, in, ret*sizeof(char));
 			}
 		}
 	}
@@ -216,6 +218,7 @@ void sigchld_handler(int sig_num)
 
 void sigterm_handler(int sig_num)
 {
+	endwin();
 	rl_callback_handler_remove();
 	exit(EXIT_SUCCESS);
 	return;
@@ -227,11 +230,4 @@ void sigwinch_handler(int sig_num)
 	ioctl(slave_pty, TIOCSWINSZ, &term_size);  /* set terminal size */
 
 	kill(pid, SIGWINCH);  /* send resize signal to child */
-}
-
-void setup_escape_seqs()
-{
-	E_KCLR	= tigetstr("clear");	S_KCLR	= strlen(E_KCLR);
-
-	return;
 }
