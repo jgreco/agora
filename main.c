@@ -85,7 +85,6 @@ int main(int argc, char *argv[])
 	curs_set(0);
 
 	keypad(stdscr, TRUE);
-	getmaxyx(stdscr, screen_h, screen_w);
 
 	for(i=0; i<8; i++)
 	for(j=0; j<8; j++)
@@ -93,8 +92,8 @@ int main(int argc, char *argv[])
 			init_pair(j*8+7-i, i, j);
 
 
-	term_win = newwin(screen_h-1, screen_w, 0, 0);
-	command_win = newwin(1, screen_w, screen_h-1, 0);
+	term_win = newwin(LINES-1, COLS, 0, 0);
+	command_win = newwin(1, COLS, LINES-1, 0);
 	wrefresh(term_win);
 	wrefresh(command_win);
 
@@ -114,7 +113,7 @@ int main(int argc, char *argv[])
 	(inbuf-1)[0] = ' ';
 
 	/* start off by forking a child with no arguments */
-	if((vterm = vterm_create_classic(screen_w, screen_h-1, 0)) == 0) {
+	if((vterm = vterm_create_classic(COLS, LINES-1, 0)) == 0) {
 		exit(EXIT_SUCCESS);
 	} else {
 		/* set up master pty side stuff */
@@ -186,7 +185,7 @@ int main(int argc, char *argv[])
 				kill(pid, SIGKILL);
 
 				/* re-fork */
-				if((vterm = vterm_create_classic(screen_w, screen_h-1, 0)) == 0) {
+				if((vterm = vterm_create_classic(COLS, LINES-1, 0)) == 0) {
 					execvp(argbuf[0], argbuf);
 				}
 				vterm_set_colors(vterm,COLOR_WHITE,COLOR_BLACK);
@@ -230,8 +229,17 @@ void sigterm_handler(int sig_num)
 
 void sigwinch_handler(int sig_num)
 {
-	ioctl(master_controlling_tty, TIOCGWINSZ, &term_size);  /* save new terminal size */
-	ioctl(slave_pty, TIOCSWINSZ, &term_size);  /* set terminal size */
+	endwin();
+	refresh();
 
-	kill(pid, SIGWINCH);  /* send resize signal to child */
+	wresize(term_win,LINES-1, COLS);
+	wresize(command_win, 1, COLS);
+	mvwin(command_win, LINES-1, 0);
+
+	wrefresh(term_win);
+	wrefresh(command_win);
+
+	vterm_resize(vterm, LINES-1, COLS);
+
+	return;
 }
