@@ -1,0 +1,151 @@
+Only in libvterm-dirty: libvterm.a
+Only in libvterm-dirty: libvterm.so
+diff -crB libvterm/Makefile libvterm-dirty/Makefile
+*** libvterm/Makefile	2009-10-13 09:48:00.000000000 -0700
+--- libvterm-dirty/Makefile	2010-10-28 21:29:24.005032149 -0700
+***************
+*** 14,19 ****
+--- 14,20 ----
+  libvterm:
+  	gcc $(CFLAGS) $(DEFS) -c -fPIC *.c $(PKG_CFG)
+  	gcc -shared -o libvterm.so -lutil *.o
++ 	ar rcs libvterm.a *.o
+  
+  clean:
+  	rm -f *.o
+diff -crB libvterm/vterm.c libvterm-dirty/vterm.c
+*** libvterm/vterm.c	2009-10-30 12:57:14.000000000 -0700
+--- libvterm-dirty/vterm.c	2010-10-28 20:50:44.879022470 -0700
+***************
+*** 136,141 ****
+--- 136,225 ----
+     return vterm;
+  }
+  
++ vterm_t*       vterm_create_classic(guint width,guint height,guint flags)
++ {
++    vterm_t        *vterm;
++    pid_t          child_pid;
++    int            master_fd;
++    struct winsize ws={.ws_xpixel=0,.ws_ypixel=0};
++    int            cell_count;
++    int            i;
++ 
++    if(height <= 0 || width <= 0) return NULL;
++ 
++    vterm=(vterm_t*)g_malloc0(sizeof(vterm_t));
++ 
++    /* record dimensions */
++    vterm->rows=height;
++    vterm->cols=width;
++ 
++    cell_count=width*height;
++ 
++    /* create the cell matrix */
++    vterm->cells=(vterm_cell_t**)g_malloc0(sizeof(vterm_cell_t*)*height);
++ 
++    for(i=0;i < height;i++)
++    {
++       vterm->cells[i]=(vterm_cell_t*)g_malloc0(sizeof(vterm_cell_t)*width);
++    }
++ 
++    // initialize all cells with defaults
++    vterm_erase(vterm);
++ 
++    // initialization of other public fields
++    vterm->crow=0;
++    vterm->ccol=0;
++ 
++    // default active colors
++    vterm->curattr=COLOR_PAIR(vterm->colors);
++ 
++    // initial scrolling area is the whole window
++    vterm->scroll_min=0;
++    vterm->scroll_max=height-1;
++ 
++    vterm->flags=flags;
++ 
++    memset(&ws,0,sizeof(ws));
++    ws.ws_row=height;
++    ws.ws_col=width;
++ 
++    child_pid=forkpty(&master_fd,NULL,NULL,&ws);
++    vterm->pty_fd=master_fd;
++ 
++    if(child_pid < 0)
++    {
++       vterm_destroy(vterm);
++       return NULL;
++    }
++ 
++    if(child_pid==0)
++    {
++       signal(SIGINT,SIG_DFL);
++ 
++       // default is rxvt emulation
++       setenv("TERM","rxvt",1);
++ 
++       if(flags & VTERM_FLAG_VT100)
++       {
++          setenv("TERM","vt100",1);
++       }
++ 
++       return 0;
++    }
++ 
++    vterm->child_pid=child_pid;
++ 
++    if(ttyname_r(master_fd,vterm->ttyname,sizeof(vterm->ttyname)-1) !=0)
++    {
++       snprintf(vterm->ttyname,sizeof(vterm->ttyname)-1,"vterm");
++    }
++ 
++    if(flags & VTERM_FLAG_VT100) vterm->write=vterm_write_vt100;
++    else vterm->write=vterm_write_rxvt;
++ 
++    return vterm;
++ }
++ 
+  void vterm_destroy(vterm_t *vterm)
+  {
+     int   i;
+Only in libvterm-dirty: vterm_colors.o
+Only in libvterm-dirty: vterm_csi_CUP.o
+Only in libvterm-dirty: vterm_csi_CUx.o
+Only in libvterm-dirty: vterm_csi_DCH.o
+Only in libvterm-dirty: vterm_csi_DECSTBM.o
+Only in libvterm-dirty: vterm_csi_DL.o
+Only in libvterm-dirty: vterm_csi_ECH.o
+Only in libvterm-dirty: vterm_csi_ED.o
+Only in libvterm-dirty: vterm_csi_EL.o
+Only in libvterm-dirty: vterm_csi_ICH.o
+Only in libvterm-dirty: vterm_csi_IL.o
+Only in libvterm-dirty: vterm_csi.o
+Only in libvterm-dirty: vterm_csi_RESTORECUR.o
+Only in libvterm-dirty: vterm_csi_SAVECUR.o
+Only in libvterm-dirty: vterm_csi_SGR.o
+Only in libvterm-dirty: vterm_dec_RM.o
+Only in libvterm-dirty: vterm_dec_SM.o
+Only in libvterm-dirty: vterm_erase.o
+Only in libvterm-dirty: vterm_escape.o
+diff -crB libvterm/vterm.h libvterm-dirty/vterm.h
+*** libvterm/vterm.h	2009-10-30 12:57:14.000000000 -0700
+--- libvterm-dirty/vterm.h	2010-10-28 20:43:12.926285195 -0700
+***************
+*** 38,43 ****
+--- 38,44 ----
+  typedef struct _vterm_s		   vterm_t;
+  
+  vterm_t*       vterm_create(guint width,guint height,guint flags);
++ vterm_t*       vterm_create_classic(guint width,guint height,guint flags);
+  void           vterm_destroy(vterm_t *vterm);
+  pid_t          vterm_get_pid(vterm_t *vterm);
+  gint           vterm_get_pty_fd(vterm_t *vterm);
+Only in libvterm-dirty: vterm_misc.o
+Only in libvterm-dirty: vterm.o
+Only in libvterm-dirty: vterm_read.o
+Only in libvterm-dirty: vterm_render.o
+Only in libvterm-dirty: vterm_resize.o
+Only in libvterm-dirty: vterm_scroll.o
+Only in libvterm-dirty: vterm_wnd.o
+Only in libvterm-dirty: vterm_write.o

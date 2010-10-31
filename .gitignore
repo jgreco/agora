@@ -1,2 +1,5 @@
 .build/
 agora
+vterm.h
+libvterm.a
+libvterm/
