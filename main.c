@@ -131,6 +131,7 @@ int main(int argc, char *argv[])
 
 		/* setup readline */
 		rl_callback_handler_install ("", null);
+		rl_variable_bind("editing-mode", "vi");
 
 		/* main input loop */
 		while(1) {
