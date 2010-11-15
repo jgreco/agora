@@ -14,7 +14,7 @@
 /* for terminfo usage only.  curses input/output is never used */
 #include <ncurses.h>
 #include <term.h>
-#include "vterm.h"
+#include "madtty.h"
 
 /* for g_shell_parse_argv */
 #include <glib.h>
@@ -35,8 +35,10 @@ FILE *log_f;
 #endif
 
 int master_controlling_tty;
-int vterm_pty;
-int slave_pty;
+int madtty_pty;
+
+madtty_t *rt;
+int madtty_ready;
 
 int pid;
 
@@ -47,7 +49,6 @@ void sigwinch_handler(int sig_num);
 void sigterm_handler(int sig_num);
 
 WINDOW *term_win, *command_win;
-vterm_t *vterm;
 int screen_h, screen_w;
 
 
@@ -63,7 +64,6 @@ int main(int argc, char *argv[])
 	char buf[BUFSIZ];
 	int cursor_offset;
 	char *inbuf;
-	int i, j;
 
 	memset(&chld, 0, sizeof(chld));
 	memset(&winch, 0, sizeof(winch));
@@ -86,11 +86,11 @@ int main(int argc, char *argv[])
 
 	keypad(stdscr, TRUE);
 
-	for(i=0; i<8; i++)
-	for(j=0; j<8; j++)
-		if(i!=7 || j!=0)
-			init_pair(j*8+7-i, i, j);
+	madtty_init_vt100_graphics();
+	madtty_init_colors();
+	getmaxyx(stdscr, screen_h, screen_w);
 
+	rt = madtty_create(screen_h-1, screen_w);
 
 	term_win = newwin(LINES-1, COLS, 0, 0);
 	command_win = newwin(1, COLS, LINES-1, 0);
@@ -113,14 +113,13 @@ int main(int argc, char *argv[])
 	(inbuf-1)[0] = ' ';
 
 	/* start off by forking a child with no arguments */
-	if((vterm = vterm_create_classic(COLS, LINES-1, 0)) == 0) {
+	if((pid = madtty_forkpty_classic(rt, &madtty_pty)) == 0) {
 		exit(EXIT_SUCCESS);
 	} else {
 		/* set up master pty side stuff */
 		int standard_in = dup(STDIN_FILENO);
+		madtty_ready = 1;
 
-		vterm_set_colors(vterm,COLOR_WHITE,COLOR_BLACK);
-		vterm_wnd_set(vterm, term_win);
 
 
 		sigaction(SIGCHLD, &chld, NULL);
@@ -139,9 +138,6 @@ int main(int argc, char *argv[])
 			int nfds=0;
 			int r;
 
-			pid = vterm_get_pid(vterm);
-			vterm_pty = vterm_get_pty_fd(vterm);
-
 			/* setup select stuff */
 			FD_ZERO(&rd);
 			FD_ZERO(&wr);
@@ -150,8 +146,10 @@ int main(int argc, char *argv[])
 			nfds = max(nfds, standard_in);
 			FD_SET(standard_in, &rd);
 
-			nfds = max(nfds, vterm_pty);
-			FD_SET(vterm_pty, &rd);
+			if(madtty_ready) {
+				nfds = max(nfds, madtty_pty);
+				FD_SET(madtty_pty, &rd);
+			}
 
 			r = select(nfds+1, &rd, &wr, &er, NULL);
 
@@ -181,29 +179,25 @@ int main(int argc, char *argv[])
 					continue;
 
 				/* kill old child, if it's still around */
-				close(vterm_pty);
-				free(vterm);  /* is this ok? */
 				kill(pid, SIGKILL);
 
 				/* re-fork */
-				if((vterm = vterm_create_classic(COLS, LINES-1, 0)) == 0) {
+				if((pid = madtty_forkpty_classic(rt, &madtty_pty)) == 0) {
 					execvp(argbuf[0], argbuf);
 				}
-				vterm_set_colors(vterm,COLOR_WHITE,COLOR_BLACK);
-				vterm_wnd_set(vterm, term_win);
+
+				madtty_ready = 1;
 
 				/* free tokenized string */
 				g_strfreev(argbuf);
 			}
 
 			/* read output from child proc */
-			if(FD_ISSET(vterm_pty, &rd)) {
-				if(vterm_read_pipe(vterm)) {
-					vterm_wnd_update(vterm);
-					touchwin(term_win);
-					wrefresh(term_win);
-					refresh();
-				}
+			if(FD_ISSET(madtty_pty, &rd)) {
+				if(madtty_process(rt) == -1)
+					madtty_ready = 0;
+				madtty_draw(rt, term_win, 0, 0);
+				wrefresh(term_win);
 			}
 		}
 	}
@@ -230,17 +224,33 @@ void sigterm_handler(int sig_num)
 
 void sigwinch_handler(int sig_num)
 {
-	endwin();
-	refresh();
+	int fd, cols = -1, rows = -1;
+	struct winsize w;
 
-	wresize(term_win,LINES-1, COLS);
-	wresize(command_win, 1, COLS);
-	mvwin(command_win, LINES-1, 0);
+	if((fd = open("/dev/tty", O_RDONLY)) != -1) {
+		if(ioctl(fd, TIOCGWINSZ, &w) != -1) {
+			rows = w.ws_row;
+			cols = w.ws_col;
+		}
+		close(fd);
+	}
+
+	if(rows <= 0) {
+		rows = atoi(getenv("LINES") ? "0" : "24");
+	}
+	if(cols <= 0) {
+		cols = atoi(getenv("COLUMNS") ? "0" : "80");
+	}
+
+	madtty_resize(rt, rows-1, cols);
+
+	wresize(term_win,rows-1, cols);
+	wresize(command_win, 1, cols);
+	mvwin(command_win, rows-1, 0);
 
 	wrefresh(term_win);
 	wrefresh(command_win);
 
-	vterm_resize(vterm, LINES-1, COLS);
 
 	return;
 }
